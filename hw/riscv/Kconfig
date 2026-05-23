@@ -145,6 +145,8 @@ config GEVICO_G233
     select SIFIVE_PWM
     select PL011
     select G233_GPIO
+    select G233_I2C_GPIO
     select G233_PWM
     select G233_WDT
     select G233_SPI
+    select G233_RSPI

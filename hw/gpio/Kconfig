@@ -16,6 +16,10 @@ config SIFIVE_GPIO
 config G233_GPIO
     bool
 
+config G233_I2C_GPIO
+    bool
+    select X_I2C_RUST
+
 config STM32L4X5_GPIO
     bool
 

@@ -62,8 +62,10 @@
 #include "hw/timer/g233_wdt.h"
 #include "hw/timer/g233_pwm.h"
 #include "hw/gpio/g233_gpio.h"
+#include "hw/gpio/g233_i2c_gpio.h"
 #include "hw/ssi/g233_spi.h"
 #include "hw/ssi/g233_spi_flash.h"
+#include "hw/ssi/g233_rspi.h"
 
 /* KVM AIA only supports APLIC MSI. APLIC Wired is always emulated by QEMU. */
 static bool g233_use_kvm_aia_aplic_imsic(RISCVG233AIAType aia_type)
@@ -111,6 +113,8 @@ static const MemMapEntry virt_memmap[] = {
     [VIRT_GPIO] =         { 0x10012000,        0x1000 },
     [VIRT_PWM] =          { 0x10015000,        0x1000 },
     [VIRT_SPI] =          { 0x10018000,        0x1000 },
+    [VIRT_I2C_GPIO] =     { 0x10013000,        0x1000 },
+    [VIRT_RSPI] =         { 0x10019000,        0x1000 },
 };
 
 /* PCIe high mmio is fixed for RV32 */
@@ -1777,6 +1781,26 @@ static void virt_machine_init(MachineState *machine)
         sysbus_mmio_map(SYS_BUS_DEVICE(spi_dev), 0, s->memmap[VIRT_SPI].base);
         sysbus_connect_irq(SYS_BUS_DEVICE(spi_dev), 0,
                            qdev_get_gpio_in(mmio_irqchip, SPI_IRQ));
+    }
+
+    /* G233 I2C GPIO Controller (Rust experiment) */
+    {
+        DeviceState *dev = qdev_new(TYPE_G233_I2C_GPIO);
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+        sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0,
+                        s->memmap[VIRT_I2C_GPIO].base);
+        sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
+                           qdev_get_gpio_in(mmio_irqchip, I2C_GPIO_IRQ));
+    }
+
+    /* G233 Rust SPI Controller (Rust experiment) */
+    {
+        DeviceState *dev = qdev_new(TYPE_G233_RSPI);
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+        sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0,
+                        s->memmap[VIRT_RSPI].base);
+        sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
+                           qdev_get_gpio_in(mmio_irqchip, RSPI_IRQ));
     }
 
     for (i = 0; i < ARRAY_SIZE(s->flash); i++) {

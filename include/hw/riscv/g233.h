@@ -94,13 +94,17 @@ enum {
     VIRT_GPIO,
     VIRT_PWM,
     VIRT_SPI,
+    VIRT_I2C_GPIO,
+    VIRT_RSPI,
 };
 
 enum {
     UART0_IRQ = 1,
     GPIO_IRQ = 2,
+    I2C_GPIO_IRQ = 3,
     WDT_IRQ = 4,
     SPI_IRQ = 5,
+    RSPI_IRQ = 7,
     VIRTIO_IRQ = 6, /* 6 to 13 */
     VIRTIO_COUNT = 8,
     RTC_IRQ = 14,

@@ -62,6 +62,62 @@ pub trait I2CSlave {
     fn recv(&mut self) -> u8;
 }
 
+// ─── AT24C02 EEPROM (used by QTest tests via C FFI) ─────────────────
+
+/// AT24C02 I2C EEPROM: 256 bytes, 8-byte page write, address 0x50.
+pub struct At24c02Eeprom {
+    addr: u8,
+    storage: [u8; 256],
+    pointer: u8,
+    first_byte: bool,
+}
+
+impl At24c02Eeprom {
+    pub fn new(addr: u8) -> Self {
+        Self {
+            addr,
+            storage: [0xFF; 256],
+            pointer: 0,
+            first_byte: true,
+        }
+    }
+}
+
+impl I2CSlave for At24c02Eeprom {
+    fn address(&self) -> u8 {
+        self.addr
+    }
+
+    fn event(&mut self, event: I2CEvent) -> i32 {
+        if event == I2CEvent::StartSend {
+            self.first_byte = true;
+        }
+        0
+    }
+
+    fn send(&mut self, data: u8) -> i32 {
+        if self.first_byte {
+            // First byte after address phase = memory address
+            self.pointer = data;
+            self.first_byte = false;
+        } else {
+            // Subsequent bytes = data to write (with page wrapping)
+            let page_base = (self.pointer as usize) & !0x07;
+            let offset = (self.pointer as usize) & 0x07;
+            self.storage[page_base + offset] = data;
+            // Advance pointer within the 8-byte page (wraps at page boundary)
+            self.pointer = (page_base | ((offset + 1) & 0x07)) as u8;
+        }
+        0
+    }
+
+    fn recv(&mut self) -> u8 {
+        let val = self.storage[self.pointer as usize];
+        self.pointer = self.pointer.wrapping_add(1);
+        val
+    }
+}
+
 // ─── I2C Bus ─────────────────────────────────────────────────────────
 
 /// A simple I2C bus that manages a list of slave devices.
@@ -88,14 +144,13 @@ impl I2CBus {
     }
 
     /// Attach a slave device to the bus.
-    pub fn attach(&mut self, _device: Box<dyn I2CSlave>) {
-        // TODO: push the device onto the bus
+    pub fn attach(&mut self, device: Box<dyn I2CSlave>) {
+        self.devices.push(device);
     }
 
     /// Return the number of devices on the bus.
     pub fn device_count(&self) -> usize {
-        // TODO: return actual count
-        0
+        self.devices.len()
     }
 
     /// Check if the bus is busy (a transfer is in progress).
@@ -111,10 +166,23 @@ impl I2CBus {
     /// Returns 0 on success (slave ACKed), -1 if no slave responds (NACK).
     ///
     /// This mirrors `i2c_start_transfer()` from upstream.
-    pub fn start_transfer(&mut self, _address: u8, _is_recv: bool) -> i32 {
-        // TODO: find a device matching _address, call its event()
-        // with StartRecv or StartSend. If ACKed, store current_addr
-        // and is_recv. Return 0 on ACK, -1 on NACK.
+    pub fn start_transfer(&mut self, address: u8, is_recv: bool) -> i32 {
+        for device in self.devices.iter_mut() {
+            if device.address() == address {
+                let event = if is_recv {
+                    I2CEvent::StartRecv
+                } else {
+                    I2CEvent::StartSend
+                };
+                let ret = device.event(event);
+                if ret == 0 {
+                    self.current_addr = Some(address);
+                    self.is_recv = is_recv;
+                    return 0;
+                }
+                return -1;
+            }
+        }
         -1
     }
 
@@ -122,15 +190,29 @@ impl I2CBus {
     ///
     /// Mirrors `i2c_end_transfer()` from upstream.
     pub fn end_transfer(&mut self) {
-        // TODO: send Finish event to the current slave, clear current_addr
+        if let Some(addr) = self.current_addr {
+            for device in self.devices.iter_mut() {
+                if device.address() == addr {
+                    device.event(I2CEvent::Finish);
+                    break;
+                }
+            }
+        }
+        self.current_addr = None;
     }
 
     /// Send a data byte from master to the current slave.
     ///
     /// Returns 0 for ACK, non-zero for NACK.
     /// Mirrors `i2c_send()` from upstream.
-    pub fn send(&mut self, _data: u8) -> i32 {
-        // TODO: call send() on the current slave
+    pub fn send(&mut self, data: u8) -> i32 {
+        if let Some(addr) = self.current_addr {
+            for device in self.devices.iter_mut() {
+                if device.address() == addr {
+                    return device.send(data);
+                }
+            }
+        }
         -1
     }
 
@@ -138,7 +220,13 @@ impl I2CBus {
     ///
     /// Mirrors `i2c_recv()` from upstream.
     pub fn recv(&mut self) -> u8 {
-        // TODO: call recv() on the current slave
+        if let Some(addr) = self.current_addr {
+            for device in self.devices.iter_mut() {
+                if device.address() == addr {
+                    return device.recv();
+                }
+            }
+        }
         0xFF
     }
 
@@ -174,6 +262,93 @@ impl I2CBus {
         }
         self.end_transfer();
         Some(result)
+    }
+}
+
+// ─── C FFI wrappers ──────────────────────────────────────────────────
+
+/// Create a new I2C bus. Returns an opaque pointer.
+/// Caller must eventually call `i2c_bus_destroy`.
+#[no_mangle]
+pub extern "C" fn i2c_bus_create() -> *mut I2CBus {
+    Box::into_raw(Box::new(I2CBus::new()))
+}
+
+/// Destroy an I2C bus created by `i2c_bus_create`.
+/// # Safety
+/// `bus` must be a valid pointer from `i2c_bus_create`.
+#[no_mangle]
+pub unsafe extern "C" fn i2c_bus_destroy(bus: *mut I2CBus) {
+    if !bus.is_null() {
+        unsafe { drop(Box::from_raw(bus)); }
+    }
+}
+
+/// Create an AT24C02 EEPROM and attach it to the bus in one step.
+/// After this call, the EEPROM is owned by the bus.
+/// # Safety
+/// `bus` must be a valid pointer.
+#[no_mangle]
+pub unsafe extern "C" fn i2c_bus_attach_at24c02(bus: *mut I2CBus, addr: u8) {
+    unsafe {
+        if !bus.is_null() {
+            (*bus).attach(Box::new(At24c02Eeprom::new(addr)));
+        }
+    }
+}
+
+/// Start an I2C transfer.
+/// # Safety
+/// `bus` must be a valid pointer.
+#[no_mangle]
+pub unsafe extern "C" fn i2c_bus_start_transfer(
+    bus: *mut I2CBus,
+    address: u8,
+    is_recv: bool,
+) -> i32 {
+    unsafe {
+        if bus.is_null() {
+            return -1;
+        }
+        (*bus).start_transfer(address, is_recv)
+    }
+}
+
+/// End the current I2C transfer.
+/// # Safety
+/// `bus` must be a valid pointer.
+#[no_mangle]
+pub unsafe extern "C" fn i2c_bus_end_transfer(bus: *mut I2CBus) {
+    unsafe {
+        if !bus.is_null() {
+            (*bus).end_transfer();
+        }
+    }
+}
+
+/// Send a byte to the current slave.
+/// # Safety
+/// `bus` must be a valid pointer.
+#[no_mangle]
+pub unsafe extern "C" fn i2c_bus_send(bus: *mut I2CBus, data: u8) -> i32 {
+    unsafe {
+        if bus.is_null() {
+            return -1;
+        }
+        (*bus).send(data)
+    }
+}
+
+/// Receive a byte from the current slave.
+/// # Safety
+/// `bus` must be a valid pointer.
+#[no_mangle]
+pub unsafe extern "C" fn i2c_bus_recv(bus: *mut I2CBus) -> u8 {
+    unsafe {
+        if bus.is_null() {
+            return 0xFF;
+        }
+        (*bus).recv()
     }
 }
 

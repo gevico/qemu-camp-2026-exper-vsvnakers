@@ -10,6 +10,10 @@ config G233_SPI
     bool
     select SSI
 
+config G233_RSPI
+    bool
+    select SSI
+
 config SSI
     bool
 
