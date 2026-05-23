@@ -780,4 +780,94 @@ done:
     riscv_raise_exception(env, exception, GETPC());
 }
 
+/* Xg233ai custom instruction helpers */
+
+static inline uint32_t xg233_ld32(CPURISCVState *env, target_ulong addr)
+{
+    uintptr_t ra = GETPC();
+    int mmu_idx = riscv_env_mmu_index(env, false);
+    MemOpIdx oi = make_memop_idx(MO_TEUL, mmu_idx);
+    return cpu_ldl_mmu(env, addr, oi, ra);
+}
+
+static inline void xg233_st32(CPURISCVState *env, target_ulong addr, uint32_t val)
+{
+    uintptr_t ra = GETPC();
+    int mmu_idx = riscv_env_mmu_index(env, false);
+    MemOpIdx oi = make_memop_idx(MO_TEUL, mmu_idx);
+    cpu_stl_mmu(env, addr, val, oi, ra);
+}
+
+void helper_xg233_sort(CPURISCVState *env, target_ulong arr_ptr,
+                       target_ulong k_val, target_ulong n_val)
+{
+    int32_t k = (int32_t)k_val;
+    for (int i = 0; i < k - 1; i++) {
+        for (int j = 0; j < k - i - 1; j++) {
+            target_ulong addr_j = arr_ptr + j * 4;
+            target_ulong addr_j1 = arr_ptr + (j + 1) * 4;
+            int32_t a = (int32_t)xg233_ld32(env, addr_j);
+            int32_t b = (int32_t)xg233_ld32(env, addr_j1);
+            if (a > b) {
+                xg233_st32(env, addr_j, (uint32_t)b);
+                xg233_st32(env, addr_j1, (uint32_t)a);
+            }
+        }
+    }
+}
+
+void helper_xg233_dma(CPURISCVState *env, target_ulong dst_ptr,
+                      target_ulong src_ptr, target_ulong grain)
+{
+    int n = 8 << (int)grain;
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            uint32_t val = xg233_ld32(env, src_ptr + (i * n + j) * 4);
+            xg233_st32(env, dst_ptr + (j * n + i) * 4, val);
+        }
+    }
+}
+
+void helper_xg233_gemm(CPURISCVState *env, target_ulong c_ptr,
+                       target_ulong a_ptr, target_ulong b_ptr)
+{
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            int64_t acc = 0;
+            for (int k = 0; k < 4; k++) {
+                int32_t av = (int32_t)xg233_ld32(env, a_ptr + (i * 4 + k) * 4);
+                int32_t bv = (int32_t)xg233_ld32(env, b_ptr + (k * 4 + j) * 4);
+                acc += (int64_t)av * (int64_t)bv;
+            }
+            xg233_st32(env, c_ptr + (i * 4 + j) * 4, (uint32_t)(int32_t)acc);
+        }
+    }
+}
+
+target_ulong helper_xg233_vdot(CPURISCVState *env, target_ulong a_ptr,
+                               target_ulong b_ptr)
+{
+    int64_t acc = 0;
+    for (int i = 0; i < 16; i++) {
+        int32_t a = (int32_t)xg233_ld32(env, a_ptr + i * 4);
+        int32_t b = (int32_t)xg233_ld32(env, b_ptr + i * 4);
+        acc += (int64_t)a * (int64_t)b;
+    }
+    return (target_ulong)acc;
+}
+
+target_ulong helper_xg233_vmax(CPURISCVState *env, target_ulong src_ptr,
+                               target_ulong n_val)
+{
+    int n = (int)n_val;
+    int32_t max_val = (int32_t)xg233_ld32(env, src_ptr);
+    for (int i = 1; i < n; i++) {
+        int32_t v = (int32_t)xg233_ld32(env, src_ptr + i * 4);
+        if (v > max_val) {
+            max_val = v;
+        }
+    }
+    return (target_ulong)(int64_t)max_val;
+}
+
 #endif /* !CONFIG_USER_ONLY */

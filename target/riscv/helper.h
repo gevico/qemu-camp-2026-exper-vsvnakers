@@ -1289,3 +1289,12 @@ DEF_HELPER_4(vsm4r_vs, void, ptr, ptr, env, i32)
 #ifndef CONFIG_USER_ONLY
 DEF_HELPER_1(ssamoswap_disabled, void, env)
 #endif
+
+/* Xg233ai custom instruction helpers */
+#ifndef CONFIG_USER_ONLY
+DEF_HELPER_4(xg233_sort, void, env, tl, tl, tl)
+DEF_HELPER_4(xg233_dma, void, env, tl, tl, tl)
+DEF_HELPER_4(xg233_gemm, void, env, tl, tl, tl)
+DEF_HELPER_3(xg233_vdot, tl, env, tl, tl)
+DEF_HELPER_3(xg233_vmax, tl, env, tl, tl)
+#endif
