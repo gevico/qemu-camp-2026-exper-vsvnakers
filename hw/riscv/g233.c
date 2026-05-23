@@ -59,6 +59,11 @@
 #include "qapi/qapi-visit-common.h"
 #include "hw/virtio/virtio-iommu.h"
 #include "hw/uefi/var-service-api.h"
+#include "hw/timer/g233_wdt.h"
+#include "hw/timer/g233_pwm.h"
+#include "hw/gpio/g233_gpio.h"
+#include "hw/ssi/g233_spi.h"
+#include "hw/ssi/g233_spi_flash.h"
 
 /* KVM AIA only supports APLIC MSI. APLIC Wired is always emulated by QEMU. */
 static bool g233_use_kvm_aia_aplic_imsic(RISCVG233AIAType aia_type)
@@ -102,6 +107,10 @@ static const MemMapEntry virt_memmap[] = {
     [VIRT_PCIE_ECAM] =    { 0x30000000,    0x10000000 },
     [VIRT_PCIE_MMIO] =    { 0x40000000,    0x40000000 },
     [VIRT_DRAM] =         { 0x80000000,           0x0 },
+    [VIRT_WDT] =          { 0x10010000,        0x1000 },
+    [VIRT_GPIO] =         { 0x10012000,        0x1000 },
+    [VIRT_PWM] =          { 0x10015000,        0x1000 },
+    [VIRT_SPI] =          { 0x10018000,        0x1000 },
 };
 
 /* PCIe high mmio is fixed for RV32 */
@@ -1714,6 +1723,61 @@ static void virt_machine_init(MachineState *machine)
 
     sysbus_create_simple("goldfish_rtc", s->memmap[VIRT_RTC].base,
         qdev_get_gpio_in(mmio_irqchip, RTC_IRQ));
+
+    /* G233 Watchdog Timer */
+    {
+        DeviceState *dev = qdev_new(TYPE_G233_WDT);
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+        sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, s->memmap[VIRT_WDT].base);
+        sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
+                           qdev_get_gpio_in(mmio_irqchip, WDT_IRQ));
+    }
+
+    /* G233 GPIO */
+    {
+        DeviceState *dev = qdev_new(TYPE_G233_GPIO);
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+        sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, s->memmap[VIRT_GPIO].base);
+        sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
+                           qdev_get_gpio_in(mmio_irqchip, GPIO_IRQ));
+    }
+
+    /* G233 PWM */
+    {
+        DeviceState *dev = qdev_new(TYPE_G233_PWM);
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+        sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, s->memmap[VIRT_PWM].base);
+    }
+
+    /* G233 SPI + Flash */
+    {
+        /* Create flash devices first */
+        DeviceState *flash0_dev = qdev_new(TYPE_G233_SPI_FLASH);
+        qdev_prop_set_uint32(flash0_dev, "size", 2 * 1024 * 1024);
+        qdev_prop_set_uint8(flash0_dev, "jedec-id0", 0xEF);
+        qdev_prop_set_uint8(flash0_dev, "jedec-id1", 0x30);
+        qdev_prop_set_uint8(flash0_dev, "jedec-id2", 0x15);
+        qdev_realize_and_unref(flash0_dev, NULL, &error_fatal);
+
+        DeviceState *flash1_dev = qdev_new(TYPE_G233_SPI_FLASH);
+        qdev_prop_set_uint32(flash1_dev, "size", 4 * 1024 * 1024);
+        qdev_prop_set_uint8(flash1_dev, "jedec-id0", 0xEF);
+        qdev_prop_set_uint8(flash1_dev, "jedec-id1", 0x30);
+        qdev_prop_set_uint8(flash1_dev, "jedec-id2", 0x16);
+        qdev_realize_and_unref(flash1_dev, NULL, &error_fatal);
+
+        /* Create SPI controller */
+        DeviceState *spi_dev = qdev_new(TYPE_G233_SPI);
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(spi_dev), &error_fatal);
+
+        /* Connect flash devices to SPI controller */
+        g233_spi_set_flash(G233_SPI(spi_dev), 0, G233_SPI_FLASH(flash0_dev));
+        g233_spi_set_flash(G233_SPI(spi_dev), 1, G233_SPI_FLASH(flash1_dev));
+
+        sysbus_mmio_map(SYS_BUS_DEVICE(spi_dev), 0, s->memmap[VIRT_SPI].base);
+        sysbus_connect_irq(SYS_BUS_DEVICE(spi_dev), 0,
+                           qdev_get_gpio_in(mmio_irqchip, SPI_IRQ));
+    }
 
     for (i = 0; i < ARRAY_SIZE(s->flash); i++) {
         /* Map legacy -drive if=pflash to machine properties */

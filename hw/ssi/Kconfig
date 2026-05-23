@@ -6,6 +6,10 @@ config SIFIVE_SPI
     bool
     select SSI
 
+config G233_SPI
+    bool
+    select SSI
+
 config SSI
     bool
 
