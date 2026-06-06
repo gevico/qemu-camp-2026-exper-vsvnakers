@@ -278,6 +278,9 @@ struct GPGPUState {
 
     /*-- SIMT 执行上下文 (CTRL 设备) --*/
     GPGPUSIMTContext simt;          /* 当前线程的执行上下文 */
+
+    /*-- 后端选择 — 进阶实验新增 --*/
+    bool use_vortex;                /* true: 使用 Vortex simx 后端 */
 };
 
 #endif /* HW_GPGPU_H */

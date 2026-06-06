@@ -212,10 +212,25 @@ static void gpgpu_ctrl_write(void *opaque, hwaddr addr, uint64_t val,
         s->kernel.shared_mem_size = val;
         break;
     case GPGPU_REG_DISPATCH:
-        /* Execute kernel synchronously */
+        /* Execute kernel — choose backend based on use_vortex flag */
         s->global_status = GPGPU_STATUS_BUSY;
         s->global_status &= ~GPGPU_STATUS_READY;
-        gpgpu_core_exec_kernel(s);
+
+        if (s->use_vortex) {
+            /* 进阶实验二: 使用 Vortex simx (C++ cycle-level 模拟器) */
+            int vortex_ret = gpgpu_core_exec_kernel_vortex(s);
+            if (vortex_ret != 0) {
+                /* Vortex failed, fall back to built-in interpreter */
+                qemu_log_mask(LOG_GUEST_ERROR,
+                    "GPGPU: Vortex backend failed, falling back to "
+                    "built-in interpreter\n");
+                gpgpu_core_exec_kernel(s);
+            }
+        } else {
+            /* 基础实验 / 进阶实验一: 使用手写 RV32I/RV32F 解释器 */
+            gpgpu_core_exec_kernel(s);
+        }
+
         s->global_status |= GPGPU_STATUS_READY;
         s->global_status &= ~GPGPU_STATUS_BUSY;
         if (s->irq_enable & GPGPU_IRQ_KERNEL_DONE) {
@@ -508,6 +523,7 @@ static const Property gpgpu_properties[] = {
                        GPGPU_DEFAULT_WARP_SIZE),
     DEFINE_PROP_UINT64("vram_size", GPGPUState, vram_size,
                        GPGPU_DEFAULT_VRAM_SIZE),
+    DEFINE_PROP_BOOL("use_vortex", GPGPUState, use_vortex, false),
 };
 
 static const VMStateDescription vmstate_gpgpu = {
@@ -542,6 +558,71 @@ static void gpgpu_class_init(ObjectClass *klass, const void *data)
     dc->vmsd = &vmstate_gpgpu;
     device_class_set_props(dc, gpgpu_properties);
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
+}
+
+/*
+ * ── GPGPUState accessor functions ──
+ *
+ * These are needed by gpgpu_core_vortex.cpp (the C++ Vortex bridge)
+ * because that file cannot #include "gpgpu.h" directly.
+ * gpgpu.h uses QOM macros (OBJECT_DECLARE_SIMPLE_TYPE) that differ
+ * between C and C++ in this QEMU version, causing compilation errors.
+ *
+ * These C functions bridge the gap: the C++ file calls them with
+ * C linkage (through gpgpu_core.h), and they access the struct fields.
+ */
+
+uint32_t gpgpu_state_get_kernel_addr_lo(GPGPUState *s)
+{
+    return (uint32_t)(s->kernel.kernel_addr & 0xFFFFFFFF);
+}
+uint32_t gpgpu_state_get_kernel_addr_hi(GPGPUState *s)
+{
+    return (uint32_t)(s->kernel.kernel_addr >> 32);
+}
+uint64_t gpgpu_state_get_kernel_addr(GPGPUState *s)
+{
+    return s->kernel.kernel_addr;
+}
+void gpgpu_state_get_grid_dim(GPGPUState *s, uint32_t dim[3])
+{
+    dim[0] = s->kernel.grid_dim[0] ? s->kernel.grid_dim[0] : 1;
+    dim[1] = s->kernel.grid_dim[1] ? s->kernel.grid_dim[1] : 1;
+    dim[2] = s->kernel.grid_dim[2] ? s->kernel.grid_dim[2] : 1;
+}
+void gpgpu_state_get_block_dim(GPGPUState *s, uint32_t dim[3])
+{
+    dim[0] = s->kernel.block_dim[0] ? s->kernel.block_dim[0] : 1;
+    dim[1] = s->kernel.block_dim[1] ? s->kernel.block_dim[1] : 1;
+    dim[2] = s->kernel.block_dim[2] ? s->kernel.block_dim[2] : 1;
+}
+uint32_t gpgpu_state_get_shared_mem(GPGPUState *s)
+{
+    return s->kernel.shared_mem_size;
+}
+uint64_t gpgpu_state_get_kernel_args(GPGPUState *s)
+{
+    return s->kernel.kernel_args;
+}
+uint8_t *gpgpu_state_get_vram_ptr(GPGPUState *s)
+{
+    return s->vram_ptr;
+}
+uint64_t gpgpu_state_get_vram_size(GPGPUState *s)
+{
+    return s->vram_size;
+}
+uint32_t gpgpu_state_get_num_cus(GPGPUState *s)
+{
+    return s->num_cus;
+}
+uint32_t gpgpu_state_get_warps_per_cu(GPGPUState *s)
+{
+    return s->warps_per_cu;
+}
+uint32_t gpgpu_state_get_warp_size(GPGPUState *s)
+{
+    return s->warp_size;
 }
 
 static const TypeInfo gpgpu_type_info = {

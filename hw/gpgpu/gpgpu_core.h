@@ -16,6 +16,11 @@
 #include "qemu/osdep.h"
 #include "fpu/softfloat.h"
 
+/* C++ guard: 确保 C++ 编译器看到 C ABI 的函数声明 */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* 前向声明 */
 typedef struct GPGPUState GPGPUState;
 
@@ -144,8 +149,66 @@ int gpgpu_core_exec_warp(GPGPUState *s, GPGPUWarp *warp, uint32_t max_cycles);
  * @s: GPGPU 设备状态
  *
  * 根据 s->kernel 中配置的 grid/block 维度执行内核。
+ * 使用内置的纯 C RV32I/RV32F 解释器。
  * 返回: 0 成功，-1 错误
  */
 int gpgpu_core_exec_kernel(GPGPUState *s);
+
+/*
+ * ── Vortex simx 后端 API (C/C++ bridge) ──
+ *
+ * 这些函数在 gpgpu_core_vortex.cpp 中实现。
+ * C 调用者通过 extern "C" 接口使用，无需感知 C++ 实现。
+ *
+ * 当 CONFIG_GPGPU_VORTEX 未定义时，gpgpu_core_exec_kernel_vortex
+ * 返回 -1，此时应回退到 gpgpu_core_exec_kernel (纯 C 解释器)。
+ */
+
+/**
+ * gpgpu_core_exec_kernel_vortex - 通过 Vortex simx 执行 kernel
+ * @s: GPGPU 设备状态
+ *
+ * 返回: 0 成功，-1 错误或 Vortex 不可用
+ */
+int gpgpu_core_exec_kernel_vortex(GPGPUState *s);
+
+/**
+ * gpgpu_core_vortex_is_done - 检查 Vortex 模拟是否完成
+ */
+bool gpgpu_core_vortex_is_done(GPGPUState *s);
+
+/**
+ * gpgpu_core_vortex_reset - 重置 Vortex 模拟器状态
+ */
+void gpgpu_core_vortex_reset(GPGPUState *s);
+
+/**
+ * gpgpu_core_vortex_shutdown - 关闭 Vortex 模拟器
+ */
+void gpgpu_core_vortex_shutdown(GPGPUState *s);
+
+/*
+ * GPGPUState accessor functions.
+ *
+ * gpgpu_core_vortex.cpp cannot #include "gpgpu.h" due to QOM macro
+ * incompatibilities. These accessors (implemented in gpgpu.c, C linkage)
+ * allow the C++ bridge to access GPGPUState fields indirectly.
+ */
+uint32_t gpgpu_state_get_kernel_addr_lo(GPGPUState *s);
+uint32_t gpgpu_state_get_kernel_addr_hi(GPGPUState *s);
+uint64_t gpgpu_state_get_kernel_addr(GPGPUState *s);
+void     gpgpu_state_get_grid_dim(GPGPUState *s, uint32_t dim[3]);
+void     gpgpu_state_get_block_dim(GPGPUState *s, uint32_t dim[3]);
+uint32_t gpgpu_state_get_shared_mem(GPGPUState *s);
+uint64_t gpgpu_state_get_kernel_args(GPGPUState *s);
+uint8_t *gpgpu_state_get_vram_ptr(GPGPUState *s);
+uint64_t gpgpu_state_get_vram_size(GPGPUState *s);
+uint32_t gpgpu_state_get_num_cus(GPGPUState *s);
+uint32_t gpgpu_state_get_warps_per_cu(GPGPUState *s);
+uint32_t gpgpu_state_get_warp_size(GPGPUState *s);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* HW_GPGPU_CORE_H */
