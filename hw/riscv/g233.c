@@ -101,8 +101,8 @@ static const MemMapEntry virt_memmap[] = {
     [VIRT_APLIC_M] =      {  0xc000000, APLIC_SIZE(VIRT_CPUS_MAX) },
     [VIRT_APLIC_S] =      {  0xd000000, APLIC_SIZE(VIRT_CPUS_MAX) },
     [VIRT_UART0] =        { 0x10000000,         0x100 },
-    [VIRT_VIRTIO] =       { 0x10001000,        0x1000 },
-    [VIRT_FW_CFG] =       { 0x10100000,          0x18 },
+    [VIRT_VIRTIO] =       { 0x10100000,        0x1000 },
+    [VIRT_FW_CFG] =       { 0x10108000,          0x18 },
     [VIRT_FLASH] =        { 0x20000000,     0x4000000 },
     [VIRT_IMSIC_M] =      { 0x24000000, VIRT_IMSIC_MAX_SIZE },
     [VIRT_IMSIC_S] =      { 0x28000000, VIRT_IMSIC_MAX_SIZE },
@@ -1210,6 +1210,9 @@ static void create_fdt(RISCVG233State *s)
     qemu_guest_getrandom_nofail(rng_seed, sizeof(rng_seed));
     qemu_fdt_setprop(ms->fdt, "/chosen", "rng-seed",
                      rng_seed, sizeof(rng_seed));
+
+    qemu_fdt_setprop_string(ms->fdt, "/chosen", "bootargs",
+                            "root=/dev/vda rw console=ttyAMA0 earlycon");
 
     qemu_fdt_add_subnode(ms->fdt, "/aliases");
 
